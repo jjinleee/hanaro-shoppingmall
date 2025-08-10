@@ -13,6 +13,8 @@ import java.nio.file.*;
 import java.security.MessageDigest;
 import java.time.LocalDate;
 import java.util.*;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 
 @Service
 @RequiredArgsConstructor
@@ -62,7 +64,12 @@ public class ProductService {
             String uuid = UUID.randomUUID().toString().replace("-", "");
             String storedName = uuid + ext;
             Path target = base.resolve(storedName);
-            mainImage.transferTo(target.toFile());
+            Files.createDirectories(target.getParent());
+            try {
+                mainImage.transferTo(target.toFile());
+            } catch (NoSuchFileException | FileNotFoundException ex) {
+                Files.copy(mainImage.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
+            }
 
             String imagePath = "/upload/%d/%02d/%02d/%s".formatted(
                     d.getYear(), d.getMonthValue(), d.getDayOfMonth(), storedName);
@@ -153,10 +160,15 @@ public class ProductService {
                 case "image/webp" -> ".webp";
                 default -> "";
             };
+            // Read bytes FIRST to avoid temp-file move issues
+            byte[] bytes = f.getBytes();
+
             String uuid = UUID.randomUUID().toString().replace("-", "");
             String storedName = uuid + ext;
             Path target = base.resolve(storedName);
-            f.transferTo(target.toFile());
+            Files.createDirectories(target.getParent());
+            // Write using NIO to ensure parent exists and avoid transferTo() pitfalls
+            Files.write(target, bytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 
             ProductImage img = new ProductImage();
             img.setProduct(product);
@@ -164,8 +176,8 @@ public class ProductService {
             img.setStoredPath("/upload/%d/%02d/%02d".formatted(
                     d.getYear(), d.getMonthValue(), d.getDayOfMonth()));
             img.setStoredName(storedName);
-            img.setSizeBytes((int) f.getSize());
-            img.setChecksumSha256(sha256Hex(f.getBytes()));
+            img.setSizeBytes(bytes.length);
+            img.setChecksumSha256(sha256Hex(bytes));
             img.setPrimaryImage(setPrimaryIfEmpty);
             Long savedId = imageRepo.save(img).getId();
             ids.add(savedId);

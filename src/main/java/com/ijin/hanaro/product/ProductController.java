@@ -62,7 +62,7 @@ public class ProductController {
     @PostMapping(value = "/admin/products/{id}/images", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public List<Long> uploadImages(
             @PathVariable Long id,
-            @RequestPart("files") List<MultipartFile> files
+            @RequestParam("files") List<MultipartFile> files
     ) throws Exception {
         return productService.uploadImages(id, files);
     }
@@ -87,9 +87,4 @@ public class ProductController {
 
     @DeleteMapping("/admin/products/{id}")
     public void delete(@PathVariable Long id) { productService.deleteSoft(id); }
-
-    @PostMapping("/admin/products/{id}/images")
-    public List<Long> upload(@PathVariable Long id, @RequestParam("files") List<MultipartFile> files) throws Exception {
-        return productService.uploadImages(id, files);
-    }
 }
