@@ -19,14 +19,20 @@ public class ProductController {
 
     // ===== 공개 조회 =====
     @GetMapping("/products")
-    public Page<ProductResponse> list(@RequestParam(required=false) String q,
-                                      @RequestParam(defaultValue="0") int page,
-                                      @RequestParam(defaultValue="10") int size) {
-        return productService.list(q, PageRequest.of(page, size, Sort.by("id").descending()));
+    public Page<ProductListItemResponse> list(
+            @RequestParam(required = false) String q,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size
+    ) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by("id").descending());
+        return productService.listPublic(q, pageable);
     }
 
+    /** 공개용 상품 상세 */
     @GetMapping("/products/{id}")
-    public ProductResponse detail(@PathVariable Long id) { return productService.detail(id); }
+    public ProductDetailResponse detail(@PathVariable Long id) {
+        return productService.detailPublic(id);
+    }
 
     // ===== 관리자 전용 =====
     @GetMapping("/admin/products")

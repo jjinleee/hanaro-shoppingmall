@@ -319,6 +319,39 @@ public class ProductService {
         return new StockAdjustResponse(p.getId(), after);
     }
 
+    //공개용 목록(검색,페이징)
+    @Transactional(readOnly = true)
+    public Page<ProductListItemResponse> listPublic(String q, Pageable pageable) {
+        return productRepo.searchPublic(q, pageable)
+                .map(p -> new ProductListItemResponse(
+                        p.getId(),
+                        p.getName(),
+                        p.getPrice(),
+                        p.getMainImagePath()
+                ));
+    }
+
+    // --- 공개용 상세
+    @Transactional(readOnly = true)
+    public ProductDetailResponse detailPublic(Long id) {
+        Product p = productRepo.findByIdAndIsDeletedFalse(id)
+                .orElseThrow(() -> new IllegalArgumentException("상품을 찾을 수 없습니다. id=" + id));
+
+        List<String> imagePaths = imageRepo.findByProduct_IdOrderByIdAsc(id).stream()
+                .map(img -> img.getStoredPath() + "/" + img.getStoredName())
+                .toList();
+
+        return new ProductDetailResponse(
+                p.getId(),
+                p.getName(),
+                p.getPrice(),
+                p.getDescription(),
+                p.getStockQuantity(),
+                p.getMainImagePath(),
+                imagePaths
+        );
+    }
+
 
 
     private static String sha256Hex(byte[] bytes) throws Exception {
