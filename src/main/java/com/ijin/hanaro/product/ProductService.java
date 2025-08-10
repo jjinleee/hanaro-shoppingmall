@@ -302,6 +302,23 @@ public class ProductService {
         }
     }
 
+    //관리자 재고조정
+    @Transactional
+    public StockAdjustResponse adjustStock(Long productId, int deltaQty) {
+        Product p = productRepo.findById(productId)
+                .orElseThrow(() -> new IllegalArgumentException("상품이 존재하지 않습니다. id=" + productId));
+
+        int after = p.getStockQuantity() + deltaQty;
+        if (after < 0) {
+            throw new IllegalArgumentException("재고가 음수가 될 수 없습니다. (현재:" + p.getStockQuantity() + ", 변경:" + deltaQty + ")");
+        }
+
+        p.setStockQuantity(after);
+        productRepo.save(p);
+
+        return new StockAdjustResponse(p.getId(), after);
+    }
+
 
 
     private static String sha256Hex(byte[] bytes) throws Exception {

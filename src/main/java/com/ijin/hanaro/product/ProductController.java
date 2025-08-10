@@ -99,4 +99,11 @@ public class ProductController {
 
     @DeleteMapping("/admin/products/{id}")
     public void delete(@PathVariable Long id) { productService.deleteSoft(id); }
+
+    //재고 조정
+    @PostMapping("/admin/products/{id}/stock-adjustments")
+    public StockAdjustResponse adjustStock(@PathVariable Long id,
+                                           @RequestBody @Valid StockAdjustRequest req) {
+        return productService.adjustStock(id, req.deltaQty());
+    }
 }
