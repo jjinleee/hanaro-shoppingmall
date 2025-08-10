@@ -13,6 +13,7 @@ import org.springframework.security.crypto.bcrypt.*;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.*;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.http.HttpMethod;
 
 @Configuration
 @EnableMethodSecurity // @PreAuthorize 사용 가능
@@ -28,16 +29,23 @@ public class SecurityConfig {
                 .sessionManagement(sm -> sm.sessionCreationPolicy(
                         org.springframework.security.config.http.SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // Swagger & docs
                         .requestMatchers(
-                                "/auth/**",
-                                "/docs/**",
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",
                                 "/v3/api-docs",
-                                "/v3/api-docs/**"
+                                "/v3/api-docs/**",
+                                "/docs/**"
                         ).permitAll()
-                        //.requestMatchers("/admin/**").hasRole("ADMIN")
-                        .requestMatchers("/admin/**").permitAll() // 테스트용-제출 전 삭제 필요
+                        // Auth
+                        .requestMatchers("/auth/**").permitAll()
+                        // static resources (uploaded images)
+                        .requestMatchers("/upload/**").permitAll()
+                        // public product reads
+                        .requestMatchers(HttpMethod.GET, "/products", "/products/**").permitAll()
+                        // admin (currently open for testing; require ROLE_ADMIN before submit)
+                        .requestMatchers("/admin/**").permitAll()
+                        // everything else requires auth
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(new JwtAuthenticationFilter(jwtUtil), UsernamePasswordAuthenticationFilter.class);
@@ -55,8 +63,6 @@ public class SecurityConfig {
 
     @Bean
     public org.springframework.security.config.annotation.web.configuration.WebSecurityCustomizer webSecurityCustomizer() {
-        return web -> web.ignoring().requestMatchers(
-                "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs", "/v3/api-docs/**"
-        );
+        return web -> {};
     }
 }

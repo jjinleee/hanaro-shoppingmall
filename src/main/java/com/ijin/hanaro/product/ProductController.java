@@ -29,6 +29,18 @@ public class ProductController {
     public ProductResponse detail(@PathVariable Long id) { return productService.detail(id); }
 
     // ===== 관리자 전용 =====
+    @GetMapping("/admin/products")
+    public Page<ProductResponse> adminList(@RequestParam(required = false) String q,
+                                           @RequestParam(defaultValue = "0") int page,
+                                           @RequestParam(defaultValue = "10") int size) {
+        return productService.list(q, PageRequest.of(page, size, Sort.by("id").descending()));
+    }
+
+    @GetMapping("/admin/products/{id}")
+    public ProductResponse adminDetail(@PathVariable Long id) {
+        return productService.detail(id);
+    }
+
     @PostMapping(value = "/admin/products", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Long create(
             @RequestParam("name") String name,
