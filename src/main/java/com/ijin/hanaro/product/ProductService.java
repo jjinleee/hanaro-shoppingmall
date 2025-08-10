@@ -93,11 +93,26 @@ public class ProductService {
         productRepo.save(p);
     }
 
+    //상품삭제
     @Transactional
     public void deleteSoft(Long id) {
         Product p = productRepo.findById(id).orElseThrow(() -> new IllegalArgumentException("상품 없음"));
-        p.setDeleted(true);
-        productRepo.save(p);
+
+        // 1) 파일 삭제 (best-effort)
+        List<ProductImage> images = imageRepo.findByProduct_Id(id);
+        for (ProductImage img : images) {
+            try {
+                String rel = (img.getStoredPath() + "/" + img.getStoredName()).replaceFirst("^/", "");
+                Path path = Paths.get("src/main/resources/static").resolve(rel).toAbsolutePath();
+                Files.deleteIfExists(path);
+            } catch (Exception ignore) { /* 파일이 없어도 무시 */ }
+        }
+
+        // 2) 이미지 엔티티 삭제
+        imageRepo.deleteAll(images);
+
+        // 3) 상품 엔티티 삭제
+        productRepo.delete(p);
     }
 
     @Transactional(readOnly = true)
