@@ -28,6 +28,11 @@ public class StatsBatch {
     @Scheduled(cron = "0 10 0 * * *")
     public void aggregateYesterday() {
         LocalDate target = LocalDate.now().minusDays(1);
+        aggregateFor(target);
+    }
+
+    /** 특정 일자 매출 집계 저장 (수동 트리거/테스트용) */
+    public void aggregateFor(LocalDate target) {
         LocalDateTime start = target.atStartOfDay();
         LocalDateTime end = target.plusDays(1).atStartOfDay().minusNanos(1);
 
