@@ -40,4 +40,10 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(
                 ErrorResponse.of("INTERNAL_ERROR", "알 수 없는 오류가 발생했습니다", List.of(ex.getClass().getSimpleName())));
     }
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalState(IllegalStateException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(
+                ErrorResponse.of("BUSINESS_ERROR", ex.getMessage(), List.of())
+        );
+    }
 }
