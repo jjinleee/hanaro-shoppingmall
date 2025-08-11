@@ -16,6 +16,11 @@ public interface OrderRepository extends JpaRepository<Order, Long>, JpaSpecific
     Optional<Order> findByIdAndUser_Id(Long id, Long userId); //본인 주문 단건 조회용
     List<Order> findByStatusAndStatusUpdatedAtBefore(OrderStatus status, LocalDateTime before);
 
+    List<Order> findByStatusAndCreatedAtBetween(
+            com.ijin.hanaro.order.OrderStatus status,
+            java.time.LocalDateTime from,
+            java.time.LocalDateTime to
+    );
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("""
