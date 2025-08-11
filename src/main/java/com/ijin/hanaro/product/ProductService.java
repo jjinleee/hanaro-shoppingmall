@@ -352,8 +352,6 @@ public class ProductService {
         );
     }
 
-
-
     private static String sha256Hex(byte[] bytes) throws Exception {
         MessageDigest md = MessageDigest.getInstance("SHA-256");
         byte[] dig = md.digest(bytes);

@@ -22,6 +22,11 @@ spring:
   profiles:
     active: local
 
+  servlet:
+    multipart:
+      max-file-size: 512KB
+      max-request-size: 3MB
+
 management:
   endpoints:
     web:
@@ -36,6 +41,15 @@ springdoc:
     path: /v3/api-docs
   swagger-ui:
     path: /swagger-ui/index.html
+
+app:
+  upload:
+    root: ${USER_HOME:/Users/jinlee}/Desktop/hanaro/uploads
+  order:
+    aging:
+      toPreparingMinutes: 120
+      toShippingMinutes: 720
+      toDeliveredMinutes: 4320
 logging:
   level:
     org.springdoc: debug

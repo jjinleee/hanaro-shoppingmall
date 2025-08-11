@@ -63,7 +63,12 @@ public class SecurityConfig {
 
     @Bean
     public org.springframework.security.config.annotation.web.configuration.WebSecurityCustomizer webSecurityCustomizer() {
-        return web -> {};
+        return web -> web.ignoring().requestMatchers(
+                "/upload/**",
+                "/swagger-ui/**", "/swagger-ui.html",
+                "/v3/api-docs", "/v3/api-docs/**",
+                "/docs/**"
+        );
     }
     @Bean
     public io.swagger.v3.oas.models.OpenAPI customOpenAPI() {

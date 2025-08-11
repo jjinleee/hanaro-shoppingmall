@@ -6,8 +6,12 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.*;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.time.LocalDate;
 
 @RestController
 @RequiredArgsConstructor
@@ -15,6 +19,7 @@ public class OrderController {
 
     private final OrderService service;
     private final UserRepository userRepo;
+    private final OrderItemRepository orderItemRepository;
 
     @Operation(summary = "장바구니 기반 주문 생성", description = "장바구니 전체를 주문으로 생성하고, 성공 시 장바구니를 비웁니다.",
             security = @SecurityRequirement(name = "bearerAuth"))
@@ -49,5 +54,59 @@ public class OrderController {
         // 여기선 DTO에 userId가 없으니 리포지토리로 한번 더 체크해도 됨.
         // 간단하게는 목록 통해 접근한다고 가정하고 넘어갈 수도 있음.
         return res;
+    }
+
+
+    @Operation(summary = "주문 목록/검색(관리자)",
+            description = "status, orderNoLike, usernameLike, fromDate, toDate로 검색; page/size. 기본 정렬 id desc")
+    @GetMapping("/admin/orders")
+    public Page<AdminOrderListItemResponse> search(
+            @RequestParam(required = false) OrderStatus status,
+            @RequestParam(required = false) String orderNoLike,
+            @RequestParam(required = false) String usernameLike,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size
+    ) {
+        var cond = new OrderAdminSearch(status, orderNoLike, usernameLike, fromDate, toDate);
+        var pageReq = PageRequest.of(page, size, Sort.by("id").descending());
+        var ordersPage = service.adminSearch(cond, pageReq);
+
+        // 1) 현재 페이지의 주문 IDs 수집
+        List<Long> orderIds = ordersPage.getContent().stream()
+                .map(Order::getId)
+                .toList();
+
+        // 2) 아이템 일괄 조회 후 orderId 기준 그룹핑 (N+1 회피)
+        Map<Long, List<OrderItemResponse>> itemsByOrderId;
+        if (orderIds.isEmpty()) {
+            itemsByOrderId = Collections.emptyMap();
+        } else {
+            var items = orderItemRepository.findByOrder_IdIn(orderIds);
+            itemsByOrderId = items.stream()
+                    .collect(Collectors.groupingBy(
+                            it -> it.getOrder().getId(),
+                            Collectors.mapping(it -> new OrderItemResponse(
+                                    it.getId(),
+                                    it.getProduct().getId(),
+                                    it.getProductName(),
+                                    it.getUnitPrice(),
+                                    it.getQuantity(),
+                                    it.getUnitPrice().multiply(new java.math.BigDecimal(it.getQuantity()))
+                            ), Collectors.toList())
+                    ));
+        }
+
+        // 3) 페이지 매핑 (userId, items 포함)
+        return ordersPage.map(o -> new AdminOrderListItemResponse(
+                o.getId(),
+                o.getOrderNo(),
+                o.getStatus(),
+                o.getTotalPrice(),
+                o.getCreatedAt(),
+                o.getUser().getId(),
+                itemsByOrderId.getOrDefault(o.getId(), List.of())
+        ));
     }
 }
