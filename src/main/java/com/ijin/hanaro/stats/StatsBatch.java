@@ -4,6 +4,8 @@ import com.ijin.hanaro.order.Order;
 import com.ijin.hanaro.order.OrderItem;
 import com.ijin.hanaro.order.OrderRepository;
 import com.ijin.hanaro.order.OrderStatus;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,10 +21,14 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class StatsBatch {
     private static final Logger log = LoggerFactory.getLogger("business_order");
+    private static final Logger productLog = LoggerFactory.getLogger("business_product");
 
     private final OrderRepository orderRepo;
     private final DailySalesRepository dailyRepo;
     private final DailyProductSalesRepository productDailyRepo;
+
+    @PersistenceContext
+    private EntityManager em;
 
     /** 매일 00:10에 어제자 매출 집계 저장 */
     @Scheduled(cron = "0 10 0 * * *")
@@ -36,8 +42,8 @@ public class StatsBatch {
         LocalDateTime start = target.atStartOfDay();
         LocalDateTime end = target.plusDays(1).atStartOfDay().minusNanos(1);
 
-        // 배송완료(DELIVERED) 기준으로 집계 (요구가 다르면 ORDERED 등으로 변경)
-        List<Order> orders = orderRepo.findByStatusAndCreatedAtBetween(OrderStatus.DELIVERED, start, end);
+        em.flush(); // ensure newly persisted orders are visible before querying
+        List<Order> orders = orderRepo.findByStatusAndPaidAtBetween(OrderStatus.DELIVERED, start, end);
 
         int totalOrders = orders.size();
         int totalItems = 0;
@@ -63,8 +69,11 @@ public class StatsBatch {
             productDailyRepo.save(new DailyProductSales(
                     target, pid, qtyByProduct.get(pid), amtByProduct.get(pid)
             ));
+            productLog.info("aggregated date={} productId={} qty={} amount={}", target, pid, qtyByProduct.get(pid), amtByProduct.get(pid));
         }
 
         log.info("aggregated date={} orders={} items={} amount={}", target, totalOrders, totalItems, totalAmount);
     }
+
+
 }

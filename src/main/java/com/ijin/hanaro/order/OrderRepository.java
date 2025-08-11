@@ -21,6 +21,12 @@ public interface OrderRepository extends JpaRepository<Order, Long>, JpaSpecific
             java.time.LocalDateTime from,
             java.time.LocalDateTime to
     );
+    List<Order> findByStatusAndPaidAtBetween(
+            com.ijin.hanaro.order.OrderStatus status,
+            java.time.LocalDateTime from,
+            java.time.LocalDateTime to
+    );
+
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("""
