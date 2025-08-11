@@ -7,7 +7,7 @@ import com.ijin.hanaro.product.Product;
 import com.ijin.hanaro.product.ProductRepository;
 import com.ijin.hanaro.user.User;
 import com.ijin.hanaro.user.UserRepository;
-import jakarta.transaction.Transactional;
+import org.springframework.transaction.annotation.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.*;
 import org.springframework.data.jpa.domain.Specification;
@@ -59,6 +59,7 @@ public class OrderService {
                 .orderNo(generateOrderNo())
                 .user(user)
                 .status(OrderStatus.ORDERED)
+                .paidAt(LocalDateTime.now())
                 .totalPrice(total)
                 .statusUpdatedAt(LocalDateTime.now())
                 .build();
@@ -94,6 +95,7 @@ public class OrderService {
         return ts + r;
     }
 
+    @Transactional(readOnly = true)
     // 내 주문 목록
     public Page<OrderListItemResponse> myOrders(String username, Pageable pageable) {
         Long userId = userRepo.findIdByUsername(username)
@@ -137,6 +139,7 @@ public class OrderService {
         ));
     }
 
+    @Transactional(readOnly = true)
     // 내 주문 상세 (본인 소유 체크는 컨트롤러에서)
     public OrderDetailResponse getDetail(Long orderId) {
         Order o = orderRepo.findById(orderId)
@@ -156,6 +159,7 @@ public class OrderService {
         );
     }
 
+    @Transactional(readOnly = true)
     public Page<Order> adminSearch(OrderAdminSearch cond, Pageable pageable) {
         Specification<Order> spec = Specification.where(OrderSpecifications.statusEq(cond.status()))
                 .and(OrderSpecifications.orderNoLike(cond.orderNoLike()))

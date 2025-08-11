@@ -57,9 +57,22 @@ public class OrderController {
     }
 
 
-    @Operation(summary = "주문 목록/검색(관리자)",
-            description = "status, orderNoLike, usernameLike, fromDate, toDate로 검색; page/size. 기본 정렬 id desc")
-    @GetMapping("/admin/orders")
+    @Operation(
+                    summary = "주문 목록/검색(관리자)",
+                    description = """
+        검색 파라미터
+        - status: ORDERED | PREPARING | SHIPPING | DELIVERED | CANCELED (옵션)
+        - orderNoLike: 주문번호 부분일치(대소문자 무시)
+        - usernameLike: 구매자 아이디 부분일치(대소문자 무시)
+        - fromDate, toDate: 주문 생성일 범위(YYYY-MM-DD). 둘 중 하나만 주면 열린 구간으로 검색.
+        - page, size: 페이지네이션 (기본 0, 10)
+        정렬: id DESC (최신 주문 먼저)
+        
+        요청 예시
+        - /admin/orders?status=ORDERED&usernameLike=jjin&page=0&size=20
+        - /admin/orders?orderNoLike=20250811&fromDate=2025-08-01&toDate=2025-08-11
+        """
+            )    @GetMapping("/admin/orders")
     public Page<AdminOrderListItemResponse> search(
             @RequestParam(required = false) OrderStatus status,
             @RequestParam(required = false) String orderNoLike,
