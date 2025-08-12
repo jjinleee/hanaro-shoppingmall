@@ -19,6 +19,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Random;
+import java.io.IOException;
 
 @Profile("local")
 @RestController
@@ -32,18 +33,21 @@ public class AdminSampleDataController {
     private final OrderRepository orderRepo;
     private final OrderItemRepository orderItemRepo;
     private final StatsBatch statsBatch;
+    private final DataExportService dataExportService;
     private final Random random = new Random();
 
     public AdminSampleDataController(UserRepository userRepo,
                                      ProductRepository productRepo,
                                      OrderRepository orderRepo,
                                      OrderItemRepository orderItemRepo,
-                                     StatsBatch statsBatch) {
+                                     StatsBatch statsBatch,
+                                     DataExportService dataExportService) {
         this.userRepo = userRepo;
         this.productRepo = productRepo;
         this.orderRepo = orderRepo;
         this.orderItemRepo = orderItemRepo;
         this.statsBatch = statsBatch;
+        this.dataExportService = dataExportService;
     }
 
     @PostMapping("/seed")
@@ -77,7 +81,8 @@ public class AdminSampleDataController {
             return userRepo.save(u);
         });
 
-        List<Product> products = new java.util.ArrayList<>(productRepo.findAll());        if (products.isEmpty()) {
+        List<Product> products = new java.util.ArrayList<>(productRepo.findAll());
+        if (products.isEmpty()) {
             // 최소 3개 생성
             for (int i = 1; i <= 3; i++) {
                 Product p = new Product();
@@ -114,23 +119,33 @@ public class AdminSampleDataController {
         return "OK";
     }
 
-//    @PostMapping("/seed-and-aggregate")
-//    @Operation(
-//            summary = "(local) 단일 일자 시드 생성 + 통계 즉시 집계",
-//            description = "username, date(yyyy-MM-dd), count(기본 5), maxItemsPerOrder(기본 3)를 받아 해당 일자에 DELIVERED 주문을 생성하고 바로 StatsBatch.aggregateFor(date)를 호출합니다."
-//    )
-//    @Transactional
-//    public String seedAndAggregate(
-//            @RequestParam String username,
-//            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
-//            @RequestParam(defaultValue = "5") int count,
-//            @RequestParam(defaultValue = "3") int maxItemsPerOrder
-//    ) {
-//        int created = statsBatch.seedDeliveredOrders(username, date, count, maxItemsPerOrder);
-//        statsBatch.aggregateFor(date);
-//        bizOrderLog.info("[Seed+Agg] username={} date={} created={}", username, date, created);
-//        return "OK: created=" + created + ", date=" + date;
-//    }
+
+    @PostMapping("/seed-and-aggregate")
+    @Operation(
+            summary = "(local) 단일 일자 시드 생성 + 통계 즉시 집계",
+            description = "username, date(yyyy-MM-dd), count(기본 5), maxItemsPerOrder(기본 3)를 받아 해당 일자에 DELIVERED 주문을 생성하고 바로 StatsBatch.aggregateFor(date)를 호출합니다."
+    )
+    @Transactional
+    public String seedAndAggregate(
+            @RequestParam String username,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            @RequestParam(defaultValue = "5") int count,
+            @RequestParam(defaultValue = "3") int maxItemsPerOrder
+    ) {
+        int created = statsBatch.seedDeliveredOrders(username, date, count, maxItemsPerOrder);
+        statsBatch.aggregateFor(date);
+        bizOrderLog.info("[Seed+Agg] username={} date={} created={}", username, date, created);
+        return "OK: created=" + created + ", date=" + date;
+    }
+
+    @PostMapping("/export-data")
+    @Operation(summary = "(local) 현재 DB를 data.sql로 export", description = "src/main/resources/data/data.sql 생성/덮어씀")
+    public String exportData() throws IOException {
+        DataExportService.ExportResult r = dataExportService.exportProjectDataSql();
+        return "OK export -> src/main/resources/data/data.sql" +
+                " (users=" + r.users() + ", products=" + r.products() + ", product_images=" + r.productImages() +
+                ", orders=" + r.orders() + ", order_items=" + r.orderItems() + ")";
+    }
 
     private void createDeliveredOrderForDay(User user, List<Product> products, LocalDate date) {
         LocalDateTime when = date.atTime(10 + random.nextInt(10), random.nextInt(60));
