@@ -19,6 +19,68 @@ java -jar build/libs/hanaro-*.jar --spring.profiles.active=local
 - 기본 포트: 8080
 - Swagger UI: http://localhost:8080/swagger-ui/index.html
 
+---
+
+## Validation (JSR-303)
+
+입력값 유효성 검사는 Jakarta Bean Validation으로 처리합니다. 위반 시 공통 오류 응답을 반환합니다.
+
+- 회원가입 `user/dto/SignupRequest`
+  - `username`: 영문/숫자/._- 4~50자
+  - `password`: 8~50자
+  - `nickname`: 1~100자
+  - `phone`: `^[0-9\-]{9,15}$`
+- 상품 등록/수정
+  - `product/dto/ProductCreateRequest` — 이름 최대 200자, 가격 `Digits(10,2)` 0 이상, 재고 0 이상 999,999 이하
+  - `product/dto/ProductUpdateRequest` — 부분 수정 허용, 동일한 제약 적용
+- 장바구니
+  - `cart/dto/CartAddRequest.quantity ≥ 1`
+  - `cart/dto/CartUpdateRequest.quantity ≥ 0` (0이면 삭제), 최대 9,999
+- 재고 조정 `product/dto/StockAdjustRequest.deltaQty` 필수
+
+예시 오류 응답은 아래 “Exception 처리” 참고
+
+---
+
+## Exception 처리 (공통 에러 포맷)
+
+전역 예외 처리기 `common/error/GlobalExceptionHandler`가 다음 형식으로 응답합니다.
+
+```json
+{ "code":"STRING", "message":"요약", "details":["원인"], "timestamp":"ISO-8601" }
+```
+
+- 코드 매핑 요약
+  - `VALIDATION_ERROR`(400): 유효성 검사 실패
+  - `BAD_REQUEST`(400): 본문 파싱 실패 등
+  - `MISSING_PARAMETER`/`TYPE_MISMATCH`(400)
+  - `UNAUTHORIZED`(401), `FORBIDDEN`(403)
+  - `DATA_INTEGRITY_ERROR`(409): FK 제약 등
+  - `BUSINESS_ERROR`(409): 도메인 규칙 위반(예: 재고 부족)
+  - `INTERNAL_ERROR`(500)
+
+---
+
+## 인증/JWT 사용 개요
+
+1) 회원가입 → 2) 로그인으로 JWT 발급 → Swagger Authorize에 `Bearer <token>` 입력
+
+```http
+POST /auth/signup
+{ "username":"user1", "password":"password123", "nickname":"유저" }
+
+POST /auth/login
+{ "username":"user1", "password":"password123" }
+```
+
+응답
+
+```json
+{ "accessToken":"...", "tokenType":"Bearer", "expiresInSec":1800 }
+```
+
+보안 정책은 `config/SecurityConfig` 참고. 공개: `/products/**`(GET), `/upload/**`, Swagger, `/actuator/health`, `/actuator/info`. 그 외 `/admin/**`는 ADMIN 권한 필요.
+
 ## 배치 작업, 스케줄러, Actuator, 로그 기록 확인 방법
 
 ### 1) 배치 작업(매출 통계) — 동작 방식
@@ -36,17 +98,10 @@ java -jar build/libs/hanaro-*.jar --spring.profiles.active=local
   ```bash
   curl -X POST 'http://localhost:8080/admin/debug/aggregate?date=2025-08-11'
   ```
-- 시드 생성(기간) + 일자별 즉시 집계
+- 샘플 데이터 생성(여러 일자) + 각 일자 즉시 집계
   ```bash
   curl -X POST 'http://localhost:8080/admin/debug/seed' \
-    -d 'from=2025-08-09' -d 'to=2025-08-11' \
-    -d 'username=sample_user' -d 'count=5' -d 'maxItemsPerOrder=3'
-  ```
-- 단일 일자 시드 + 즉시 집계
-  ```bash
-  curl -X POST 'http://localhost:8080/admin/debug/seed-and-aggregate' \
-    -d 'date=2025-08-11' -d 'username=sample_user' \
-    -d 'count=5' -d 'maxItemsPerOrder=3'
+    -d 'startDate=2025-08-09' -d 'days=3' -d 'ordersPerDay=5'
   ```
 
 #### 결과 검증 체크리스트
@@ -71,7 +126,7 @@ java -jar build/libs/hanaro-*.jar --spring.profiles.active=local
 
 ### 2) 스케줄러(주문 상태 전환) — 확인 방법
 - **구성**: `@EnableScheduling` + 스케줄 클래스(예: `OrderStatusScheduler`)
-- **주기**: 10분 간격 실행 (로그 타임스탬프 기준)
+- **주기**: 5분(`ORDERED → PREPARING`), 15분(`PREPARING → SHIPPING`), 매 정시(`SHIPPING → DELIVERED`)
 - **동작**: 상태 전환 예시 — `ORDERED → PREPARING`, `PREPARING → SHIPPING`
 - **로그 확인**: `logs/business_order.log`
   ```
@@ -97,6 +152,7 @@ java -jar build/libs/hanaro-*.jar --spring.profiles.active=local
   - `/actuator/metrics/http.server.requests` : HTTP 요청 메트릭
   - `/actuator/env` : 환경 변수/프로퍼티
   - `/actuator/beans` : 빈 목록
+- 보안: `health`, `info` 외에는 ADMIN 권한 필요 (`/actuator/**`).
 - 메트릭 예시 조회
   ```
   GET /actuator/metrics/http.server.requests
@@ -137,7 +193,26 @@ java -jar build/libs/hanaro-*.jar --spring.profiles.active=local
   PRODUCT_UPDATE id=.. changed=[price, stockQuantity]
   PRODUCT_IMAGE_UPSERT productId=.. primary=true count=..
   ```
- 
+
+---
+
+## DB 및 테스트 코드
+
+- 데이터 Export → `src/main/resources/data/data.sql`
+  - `POST /admin/debug/export-data` (local 프로필 전용)
+  - 구현: `stats/DataExportService` — FK/데이터 타입 안전 처리, `TRUNCATE → INSERT` 순서
+- 테스트: `test/.../stats/DataSqlImportTest`
+  - `@Sql(classpath:data/data.sql)`로 적재 후 핵심 테이블 레코드 유무 검증
+- 수동 확인: SQL 클라이언트에서 `data.sql` 실행 또는 `./gradlew test -i`
+
+---
+
+## 파일/이미지 업로드
+
+- 정적 제공: `WebConfig.addResourceHandlers()`
+  - `/upload/**` → `file:${app.upload.root}` 또는 `classpath:/static/upload/`
+- 용량 제한: `application.yml`의 `spring.servlet.multipart`
+
 ## Admin Sample Data Controller (local)
 
 > 로컬 개발 편의용 디버그 엔드포인트입니다. 보안상 운영/스테이징에서는 비활성화/차단
@@ -184,7 +259,7 @@ java -jar build/libs/hanaro-*.jar --spring.profiles.active=local
 - Springdoc(OpenAPI) + Swagger UI
 - Actuator (관찰/모니터링)
 - Logback (롤링 파일, 비즈니스 로그 분리)
-  
+
 ### 디렉토리 구조
   ```
 .
