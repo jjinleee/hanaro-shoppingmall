@@ -7,4 +7,6 @@ import java.util.List;
 public interface DailyProductSalesRepository extends JpaRepository<DailyProductSales, Long> {
     List<DailyProductSales> findBySalesDate(LocalDate date);
     List<DailyProductSales> findBySalesDateBetweenOrderBySalesDate(LocalDate from, LocalDate to);
+    void deleteBySalesDate(LocalDate date);
+
 }

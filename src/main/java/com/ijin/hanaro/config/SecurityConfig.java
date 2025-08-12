@@ -29,23 +29,29 @@ public class SecurityConfig {
                 .sessionManagement(sm -> sm.sessionCreationPolicy(
                         org.springframework.security.config.http.SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // Swagger & docs
+                        // Allow CORS preflight
+                        .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
+                        // Swagger & API docs
                         .requestMatchers(
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",
                                 "/v3/api-docs",
                                 "/v3/api-docs/**",
-                                "/docs/**"
+                                "/docs/**",
+                                "monitor/**"
                         ).permitAll()
-                        // Auth
+                        // Actuator – expose health/info publicly; lock down the rest to ADMIN
+                        .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
+                        .requestMatchers("/actuator/**").hasRole("ADMIN")
+                        // Auth endpoints
                         .requestMatchers("/auth/**").permitAll()
-                        // static resources (uploaded images)
+                        // Static uploaded images
                         .requestMatchers("/upload/**").permitAll()
-                        // public product reads
-                        .requestMatchers(HttpMethod.GET, "/products", "/products/**").permitAll()
-                        // admin (currently open for testing; require ROLE_ADMIN before submit)
-                        .requestMatchers("/admin/**").permitAll()
-                        // everything else requires auth
+                        // Public product reads
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/products", "/products/**").permitAll()
+                        // Admin APIs
+                        .requestMatchers("/admin/**").hasRole("ADMIN")
+                        // Everything else requires authentication
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(new JwtAuthenticationFilter(jwtUtil), UsernamePasswordAuthenticationFilter.class);
@@ -61,15 +67,6 @@ public class SecurityConfig {
         return cfg.getAuthenticationManager();
     }
 
-    @Bean
-    public org.springframework.security.config.annotation.web.configuration.WebSecurityCustomizer webSecurityCustomizer() {
-        return web -> web.ignoring().requestMatchers(
-                "/upload/**",
-                "/swagger-ui/**", "/swagger-ui.html",
-                "/v3/api-docs", "/v3/api-docs/**",
-                "/docs/**"
-        );
-    }
     @Bean
     public io.swagger.v3.oas.models.OpenAPI customOpenAPI() {
         return new io.swagger.v3.oas.models.OpenAPI()

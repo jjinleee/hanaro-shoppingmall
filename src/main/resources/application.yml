@@ -31,10 +31,15 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,metrics,env,beans,threaddump,loggers,heapdump
   endpoint:
     health:
       show-details: when_authorized
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: hanaro
 
 springdoc:
   api-docs:

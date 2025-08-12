@@ -12,6 +12,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.*;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -27,65 +29,76 @@ public class OrderService {
     private final CartItemRepository cartItemRepo;
     private final ProductRepository productRepo;
     private final UserRepository userRepo;
+    private final MeterRegistry meterRegistry;
 
     /** 장바구니 전체를 주문으로 생성하고, 성공 시 장바구니 비움 + 재고 차감 (트랜잭션) */
     @Transactional
     public OrderCreateResponse createFromCart(String username) {
-        User user = userRepo.findByUsername(username)
-                .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
+        long _start = System.nanoTime();
+        try {
+            User user = userRepo.findByUsername(username)
+                    .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
 
-        List<CartItem> cartItems = cartItemRepo.findByCartUserId(user.getId());
-        if (cartItems.isEmpty()) {
-            throw new IllegalStateException("장바구니가 비어 있어 주문을 생성할 수 없습니다.");
-        }
-
-        // 재고/삭제 체크 + 가격 합 계산
-        BigDecimal total = BigDecimal.ZERO;
-        Map<Long, Product> productMap = new HashMap<>();
-        for (CartItem ci : cartItems) {
-            Product p = productRepo.findById(ci.getProduct().getId())
-                    .orElseThrow(() -> new IllegalArgumentException("상품을 찾을 수 없습니다. id=" + ci.getProduct().getId()));
-            if (p.isDeleted()) throw new IllegalStateException("삭제된 상품이 포함되어 있습니다. 상품 id=" + p.getId());
-            if (p.getStockQuantity() <= 0) throw new IllegalStateException("품절 상품이 포함되어 있습니다. 상품 id=" + p.getId());
-            if (ci.getQuantity() > p.getStockQuantity()) {
-                throw new IllegalStateException("재고 부족: 상품(" + p.getName() + ") 남은 재고=" + p.getStockQuantity());
+            List<CartItem> cartItems = cartItemRepo.findByCartUserId(user.getId());
+            if (cartItems.isEmpty()) {
+                throw new IllegalStateException("장바구니가 비어 있어 주문을 생성할 수 없습니다.");
             }
-            total = total.add(p.getPrice().multiply(BigDecimal.valueOf(ci.getQuantity())));
-            productMap.put(p.getId(), p);
-        }
 
-        // 주문 헤더 생성
-        Order order = Order.builder()
-                .orderNo(generateOrderNo())
-                .user(user)
-                .status(OrderStatus.ORDERED)
-                .paidAt(LocalDateTime.now())
-                .totalPrice(total)
-                .statusUpdatedAt(LocalDateTime.now())
-                .build();
-        orderRepo.save(order);
+            // 재고/삭제 체크 + 가격 합 계산
+            BigDecimal total = BigDecimal.ZERO;
+            Map<Long, Product> productMap = new HashMap<>();
+            for (CartItem ci : cartItems) {
+                Product p = productRepo.findById(ci.getProduct().getId())
+                        .orElseThrow(() -> new IllegalArgumentException("상품을 찾을 수 없습니다. id=" + ci.getProduct().getId()));
+                if (p.isDeleted()) throw new IllegalStateException("삭제된 상품이 포함되어 있습니다. 상품 id=" + p.getId());
+                if (p.getStockQuantity() <= 0) throw new IllegalStateException("품절 상품이 포함되어 있습니다. 상품 id=" + p.getId());
+                if (ci.getQuantity() > p.getStockQuantity()) {
+                    throw new IllegalStateException("재고 부족: 상품(" + p.getName() + ") 남은 재고=" + p.getStockQuantity());
+                }
+                total = total.add(p.getPrice().multiply(BigDecimal.valueOf(ci.getQuantity())));
+                productMap.put(p.getId(), p);
+            }
 
-        // 아이템 생성 + 재고 차감
-        for (CartItem ci : cartItems) {
-            Product p = productMap.get(ci.getProduct().getId());
-
-            OrderItem oi = OrderItem.builder()
-                    .order(order)
-                    .product(p)
-                    .productName(p.getName())
-                    .unitPrice(p.getPrice())
-                    .quantity(ci.getQuantity())
+            // 주문 헤더 생성
+            Order order = Order.builder()
+                    .orderNo(generateOrderNo())
+                    .user(user)
+                    .status(OrderStatus.ORDERED)
+                    .paidAt(LocalDateTime.now())
+                    .totalPrice(total)
+                    .statusUpdatedAt(LocalDateTime.now())
                     .build();
-            orderItemRepo.save(oi);
+            order.setCreatedAt(LocalDateTime.now());
+            orderRepo.save(order);
 
-            p.setStockQuantity(p.getStockQuantity() - ci.getQuantity());
-            productRepo.save(p);
+            // 아이템 생성 + 재고 차감
+            for (CartItem ci : cartItems) {
+                Product p = productMap.get(ci.getProduct().getId());
+
+                OrderItem oi = OrderItem.builder()
+                        .order(order)
+                        .product(p)
+                        .productName(p.getName())
+                        .unitPrice(p.getPrice())
+                        .quantity(ci.getQuantity())
+                        .build();
+                orderItemRepo.save(oi);
+
+                p.setStockQuantity(p.getStockQuantity() - ci.getQuantity());
+                productRepo.save(p);
+            }
+
+            // 장바구니 비우기
+            cartItemRepo.deleteByCartUserId(user.getId());
+
+            meterRegistry.counter("orders.created.count").increment();
+            return new OrderCreateResponse(order.getId(), order.getOrderNo());
+        } finally {
+            Timer.builder("orders.create.time")
+                 .publishPercentileHistogram()
+                 .register(meterRegistry)
+                 .record(System.nanoTime() - _start, java.util.concurrent.TimeUnit.NANOSECONDS);
         }
-
-        // 장바구니 비우기
-        cartItemRepo.deleteByCartUserId(user.getId());
-
-        return new OrderCreateResponse(order.getId(), order.getOrderNo());
     }
 
     private String generateOrderNo() {
