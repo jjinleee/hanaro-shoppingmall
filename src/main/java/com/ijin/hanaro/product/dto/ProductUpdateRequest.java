@@ -5,16 +5,13 @@ import jakarta.validation.constraints.*;
 import java.math.BigDecimal;
 
 public record ProductUpdateRequest(
-        @NotBlank
         @Size(max = 200)
         String name,
 
-        @NotNull
         @PositiveOrZero
         @Digits(integer = 12, fraction = 2)
         BigDecimal price,
 
-        @NotNull
         @PositiveOrZero
         Integer stockQuantity,
 
@@ -22,8 +19,5 @@ public record ProductUpdateRequest(
         String description,
 
         @Size(max = 500)
-        String mainImagePath,
-
-        @NotNull
-        Boolean deleted
+        String mainImagePath
 ) {}

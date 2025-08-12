@@ -13,5 +13,6 @@ public interface ProductImageRepository extends JpaRepository<ProductImage, Long
 
     List<ProductImage> findByProduct_Id(Long productId);
     List<ProductImage> findByProduct_IdOrderByIdAsc(Long productId);
-
+    boolean existsByChecksumSha256(String checksumSha256);
+    boolean existsByChecksumSha256AndIdNot(String checksumSha256, Long id);
 }

@@ -26,7 +26,7 @@ import java.util.Random;
 @PreAuthorize("permitAll()")
 public class AdminSampleDataController {
 
-    private static final Logger bizOrderLog = LoggerFactory.getLogger("business_order");
+    private static final Logger bizOrderLog = LoggerFactory.getLogger("business.order");
     private final UserRepository userRepo;
     private final ProductRepository productRepo;
     private final OrderRepository orderRepo;
@@ -77,8 +77,7 @@ public class AdminSampleDataController {
             return userRepo.save(u);
         });
 
-        List<Product> products = productRepo.findAll();
-        if (products.isEmpty()) {
+        List<Product> products = new java.util.ArrayList<>(productRepo.findAll());        if (products.isEmpty()) {
             // 최소 3개 생성
             for (int i = 1; i <= 3; i++) {
                 Product p = new Product();
@@ -114,6 +113,24 @@ public class AdminSampleDataController {
         statsBatch.aggregateFor(date);
         return "OK";
     }
+
+//    @PostMapping("/seed-and-aggregate")
+//    @Operation(
+//            summary = "(local) 단일 일자 시드 생성 + 통계 즉시 집계",
+//            description = "username, date(yyyy-MM-dd), count(기본 5), maxItemsPerOrder(기본 3)를 받아 해당 일자에 DELIVERED 주문을 생성하고 바로 StatsBatch.aggregateFor(date)를 호출합니다."
+//    )
+//    @Transactional
+//    public String seedAndAggregate(
+//            @RequestParam String username,
+//            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+//            @RequestParam(defaultValue = "5") int count,
+//            @RequestParam(defaultValue = "3") int maxItemsPerOrder
+//    ) {
+//        int created = statsBatch.seedDeliveredOrders(username, date, count, maxItemsPerOrder);
+//        statsBatch.aggregateFor(date);
+//        bizOrderLog.info("[Seed+Agg] username={} date={} created={}", username, date, created);
+//        return "OK: created=" + created + ", date=" + date;
+//    }
 
     private void createDeliveredOrderForDay(User user, List<Product> products, LocalDate date) {
         LocalDateTime when = date.atTime(10 + random.nextInt(10), random.nextInt(60));

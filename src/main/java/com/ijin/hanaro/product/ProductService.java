@@ -16,11 +16,16 @@ import java.util.*;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 @Service
 @RequiredArgsConstructor
 public class ProductService {
     private final ProductRepository productRepo;
     private final ProductImageRepository imageRepo;
+
+    private static final Logger BIZ_LOG = LoggerFactory.getLogger("business.product");
 
     private static final int MAX_SINGLE = 512 * 1024;           // 512KB
     private static final long MAX_TOTAL_PER_PRODUCT = 3L * 1024 * 1024; // 3MB
@@ -36,21 +41,29 @@ public class ProductService {
             throw new IllegalStateException("이미 존재하는 상품명입니다: " + r.name());
         }
 
-        Product p = new Product();
-        p.setName(r.name());
-        p.setDescription(r.description());
-        p.setPrice(r.price());
-        p.setStockQuantity(r.stockQuantity());
-
         if (!ALLOWED.contains(mainImage.getContentType())) {
             throw new IllegalArgumentException("허용되지 않는 파일 형식 (JPEG, PNG, WEBP 만 가능)");
         }
         if (mainImage.getSize() > MAX_SINGLE) {
             throw new IllegalArgumentException("메인 이미지는 512KB를 초과할 수 없습니다.");
         }
+        // 총합(대표 포함) 3MB 검사: 새 상품은 기존 사용량이 0이므로 메인만 검사하면 충분하지만, 규칙을 명확히 하기 위해 합산 체크
+        long used = 0L;
+        if (used + mainImage.getSize() > MAX_TOTAL_PER_PRODUCT) {
+            throw new IllegalArgumentException("상품당 이미지 총합 3MB 초과");
+        }
+
+        Product p = new Product();
+        p.setName(r.name());
+        p.setDescription(r.description());
+        p.setPrice(r.price());
+        p.setStockQuantity(r.stockQuantity());
+        // 우선 상품을 저장하여 ID를 확보
+        p = productRepo.save(p);
+        BIZ_LOG.info("PRODUCT_CREATE_BEGIN id={} name='{}' price={} stock={}", p.getId(), p.getName(), p.getPrice(), p.getStockQuantity());
 
         try {
-            // 저장 경로: ./uploads/YYYY/MM/DD
+            // 저장 경로: ./upload/YYYY/MM/DD
             LocalDate d = LocalDate.now();
             Path base = Paths.get("src/main/resources/static/upload",
                     String.valueOf(d.getYear()),
@@ -68,25 +81,49 @@ public class ProductService {
             String uuid = UUID.randomUUID().toString().replace("-", "");
             String storedName = uuid + ext;
             Path target = base.resolve(storedName);
-            Files.createDirectories(target.getParent());
             try {
                 mainImage.transferTo(target.toFile());
             } catch (NoSuchFileException | FileNotFoundException ex) {
                 Files.copy(mainImage.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
             }
 
-            String imagePath = "/upload/%d/%02d/%02d/%s".formatted(
-                    d.getYear(), d.getMonthValue(), d.getDayOfMonth(), storedName);
-            p.setMainImagePath(imagePath);
+            byte[] bytes = Files.readAllBytes(target);
+            String checksum = sha256Hex(bytes);
+            if (imageRepo.existsByChecksumSha256(checksum)) {
+                throw new IllegalStateException("중복된 이미지입니다");
+            }
+            String storedPath = "/upload/%d/%02d/%02d".formatted(d.getYear(), d.getMonthValue(), d.getDayOfMonth());
+
+            // ProductImage 엔티티로도 저장(대표 이미지)
+            ProductImage img = new ProductImage();
+            img.setProduct(p);
+            img.setOriginalName(Objects.requireNonNull(mainImage.getOriginalFilename()));
+            img.setStoredPath(storedPath);
+            img.setStoredName(storedName);
+            img.setSizeBytes(bytes.length);
+            img.setChecksumSha256(checksum);
+            img.setPrimaryImage(true);
+            imageRepo.save(img);
+
+            // 상품의 대표 경로도 동기화
+            p.setMainImagePath(storedPath + "/" + storedName);
+            productRepo.save(p);
+            BIZ_LOG.info("PRODUCT_CREATED id={} name='{}' mainImagePath={} checksum={} bytes={}",
+                    p.getId(), p.getName(), p.getMainImagePath(), checksum, bytes.length);
         } catch (IOException e) {
+            BIZ_LOG.error("PRODUCT_CREATE_FAILED_IO name='{}' message={}", r.name(), e.getMessage(), e);
             throw new IllegalStateException("이미지 저장 중 오류가 발생했습니다.", e);
+        } catch (Exception e) {
+            BIZ_LOG.error("PRODUCT_CREATE_FAILED name='{}' message={}", r.name(), e.getMessage(), e);
+            throw new RuntimeException(e);
         }
 
-        return productRepo.save(p).getId();
+        return p.getId();
     }
 
     @Transactional
     public void update(Long id, ProductUpdateRequest r) {
+        BIZ_LOG.info("PRODUCT_UPDATE_BEGIN id={}", id);
         Product p = productRepo.findById(id).orElseThrow(() -> new IllegalArgumentException("상품 없음"));
         // 이름이 변경되는 경우에만 중복 검사
         if (r.name() != null && !p.getName().equalsIgnoreCase(r.name())) {
@@ -94,18 +131,25 @@ public class ProductService {
                 throw new IllegalStateException("이미 존재하는 상품명입니다: " + r.name());
             }
         }
-        p.setName(r.name());
-        p.setDescription(r.description());
-        p.setPrice(r.price());
-        p.setStockQuantity(r.stockQuantity());
-        if (r.mainImagePath()!=null) p.setMainImagePath(r.mainImagePath());
-        if (r.deleted()!=null) p.setDeleted(r.deleted());
+        if (r.name() != null) p.setName(r.name());
+        if (r.description() != null) p.setDescription(r.description());
+        if (r.price() != null) p.setPrice(r.price());
+        if (r.stockQuantity() != null) p.setStockQuantity(r.stockQuantity());
+        if (r.mainImagePath() != null) p.setMainImagePath(r.mainImagePath());
+        List<String> changed = new ArrayList<>();
+        if (r.name() != null) changed.add("name");
+        if (r.description() != null) changed.add("description");
+        if (r.price() != null) changed.add("price");
+        if (r.stockQuantity() != null) changed.add("stockQuantity");
+        if (r.mainImagePath() != null) changed.add("mainImagePath");
         productRepo.save(p);
+        BIZ_LOG.info("PRODUCT_UPDATED id={} changed={}", p.getId(), changed);
     }
 
     //상품삭제
     @Transactional
     public void deleteSoft(Long id) {
+        BIZ_LOG.info("PRODUCT_DELETE_BEGIN id={}", id);
         Product p = productRepo.findById(id).orElseThrow(() -> new IllegalArgumentException("상품 없음"));
 
         // 1) 파일 삭제 (best-effort)
@@ -123,6 +167,7 @@ public class ProductService {
 
         // 3) 상품 엔티티 삭제
         productRepo.delete(p);
+        BIZ_LOG.info("PRODUCT_DELETED id={} imagesDeleted={}", id, images.size());
     }
 
     @Transactional(readOnly = true)
@@ -130,10 +175,18 @@ public class ProductService {
         Page<Product> page = (q==null || q.isBlank())
                 ? productRepo.findByIsDeletedFalse(pageable)
                 : productRepo.findByIsDeletedFalseAndNameContainingIgnoreCase(q, pageable);
-        return page.map(p -> new ProductResponse(
-                p.getId(), p.getName(), p.getDescription(), p.getPrice(),
-                p.getStockQuantity(), p.getMainImagePath(), List.of()
-        ));
+        return page.map(p -> {
+            List<ProductImage> imgs = imageRepo.findByProduct_Id(p.getId());
+            List<String> paths = imgs.stream()
+                    .sorted(Comparator.comparing(ProductImage::isPrimaryImage).reversed()
+                            .thenComparing(ProductImage::getId))
+                    .map(img -> img.getStoredPath() + "/" + img.getStoredName())
+                    .toList();
+            return new ProductResponse(
+                    p.getId(), p.getName(), p.getDescription(), p.getPrice(),
+                    p.getStockQuantity(), p.getMainImagePath(), paths
+            );
+        });
     }
 
     @Transactional(readOnly = true)
@@ -163,8 +216,11 @@ public class ProductService {
         // 총합 체크
         long used = imageRepo.sumSizeByProductId(productId);
         long incoming = files.stream().mapToLong(MultipartFile::getSize).sum();
+        BIZ_LOG.info("IMAGES_UPLOAD_BEGIN productId={} count={} incomingBytes={} usedBytes={}", productId, files.size(), incoming, used);
         if (used + incoming > MAX_TOTAL_PER_PRODUCT)
             throw new IllegalArgumentException("상품당 이미지 총합 3MB 초과");
+
+        long uploadedBytes = 0L;
 
         // 저장 경로: ./uploads/YYYY/MM/DD
         LocalDate d = LocalDate.now();
@@ -187,6 +243,10 @@ public class ProductService {
             };
             // Read bytes FIRST to avoid temp-file move issues
             byte[] bytes = f.getBytes();
+            String checksum = sha256Hex(bytes);
+            if (imageRepo.existsByChecksumSha256(checksum)) {
+                throw new IllegalStateException("중복된 이미지입니다");
+            }
 
             String uuid = UUID.randomUUID().toString().replace("-", "");
             String storedName = uuid + ext;
@@ -202,8 +262,9 @@ public class ProductService {
                     d.getYear(), d.getMonthValue(), d.getDayOfMonth()));
             img.setStoredName(storedName);
             img.setSizeBytes(bytes.length);
-            img.setChecksumSha256(sha256Hex(bytes));
+            img.setChecksumSha256(checksum);
             img.setPrimaryImage(setPrimaryIfEmpty);
+            uploadedBytes += bytes.length;
             Long savedId = imageRepo.save(img).getId();
             ids.add(savedId);
 
@@ -215,14 +276,15 @@ public class ProductService {
 
             setPrimaryIfEmpty = false;
         }
+        BIZ_LOG.info("IMAGES_UPLOADED productId={} count={} bytes={} newTotalBytes={}",
+                productId, ids.size(), uploadedBytes, used + incoming);
         return ids;
-
-
     }
 
     //상품정보수정
     @Transactional
     public void updateWithImage(Long id, ProductUpdateRequest r, MultipartFile mainImage) {
+        BIZ_LOG.info("PRODUCT_UPDATE_WITH_IMAGE_BEGIN id={} hasMainImage={}", id, (mainImage != null && !mainImage.isEmpty()));
         Product p = productRepo.findById(id).orElseThrow(() -> new IllegalArgumentException("상품 없음"));
         // 이름이 변경되는 경우에만 중복 검사
         if (r.name() != null && !p.getName().equalsIgnoreCase(r.name())) {
@@ -230,10 +292,10 @@ public class ProductService {
                 throw new IllegalStateException("이미 존재하는 상품명입니다: " + r.name());
             }
         }
-        p.setName(r.name());
-        p.setDescription(r.description());
-        p.setPrice(r.price());
-        p.setStockQuantity(r.stockQuantity());
+        if (r.name() != null) p.setName(r.name());
+        if (r.description() != null) p.setDescription(r.description());
+        if (r.price() != null) p.setPrice(r.price());
+        if (r.stockQuantity() != null) p.setStockQuantity(r.stockQuantity());
 
         // 메인 이미지 교체가 들어온 경우에만 저장/검증
         if (mainImage != null && !mainImage.isEmpty()) {
@@ -245,11 +307,21 @@ public class ProductService {
             }
 
             try {
+                // 총합(대표 포함) 3MB 제한을 위해 기존 대표 이미지 용량을 제외하고 신규 용량을 더해 검사
+                long used = imageRepo.sumSizeByProductId(id);
+                Optional<ProductImage> oldPrimaryOpt = imageRepo.findByProduct_Id(id).stream()
+                        .filter(ProductImage::isPrimaryImage)
+                        .findFirst();
+                long usedWithoutOldPrimary = used - oldPrimaryOpt.map(ProductImage::getSizeBytes).orElse(0);
+                if (usedWithoutOldPrimary + mainImage.getSize() > MAX_TOTAL_PER_PRODUCT) {
+                    throw new IllegalArgumentException("상품당 이미지 총합 3MB 초과");
+                }
+
                 LocalDate d = LocalDate.now();
                 Path base = Paths.get("src/main/resources/static/upload",
-                                String.valueOf(d.getYear()),
-                                String.format("%02d", d.getMonthValue()),
-                                String.format("%02d", d.getDayOfMonth()))
+                        String.valueOf(d.getYear()),
+                        String.format("%02d", d.getMonthValue()),
+                        String.format("%02d", d.getDayOfMonth()))
                         .toAbsolutePath();
                 Files.createDirectories(base);
 
@@ -263,26 +335,154 @@ public class ProductService {
                 Path target = base.resolve(storedName);
                 mainImage.transferTo(target.toFile());
 
-                String imagePath = "/upload/%d/%02d/%02d/%s".formatted(
-                        d.getYear(), d.getMonthValue(), d.getDayOfMonth(), storedName);
-                p.setMainImagePath(imagePath);
+                byte[] bytes = Files.readAllBytes(target);
+                String checksum = sha256Hex(bytes);
+                Long oldPrimaryId = oldPrimaryOpt.map(ProductImage::getId).orElse(null);
+                if (oldPrimaryId == null) {
+                    if (imageRepo.existsByChecksumSha256(checksum)) {
+                        throw new IllegalStateException("중복된 이미지입니다");
+                    }
+                } else {
+                    if (imageRepo.existsByChecksumSha256AndIdNot(checksum, oldPrimaryId)) {
+                        throw new IllegalStateException("중복된 이미지입니다");
+                    }
+                }
+                String storedPath = "/upload/%d/%02d/%02d".formatted(d.getYear(), d.getMonthValue(), d.getDayOfMonth());
+
+                // 기존 대표 이미지 있으면 파일/엔티티 삭제
+                if (oldPrimaryOpt.isPresent()) {
+                    ProductImage old = oldPrimaryOpt.get();
+                    try {
+                        String rel = (old.getStoredPath() + "/" + old.getStoredName()).replaceFirst("^/", "");
+                        Path oldPath = Paths.get("src/main/resources/static").resolve(rel).toAbsolutePath();
+                        Files.deleteIfExists(oldPath);
+                    } catch (Exception ignore) { /* 파일이 없어도 무시 */ }
+                    imageRepo.delete(old);
+                }
+
+                // 새 대표 이미지 저장
+                ProductImage img = new ProductImage();
+                img.setProduct(p);
+                img.setOriginalName(Objects.requireNonNull(mainImage.getOriginalFilename()));
+                img.setStoredPath(storedPath);
+                img.setStoredName(storedName);
+                img.setSizeBytes(bytes.length);
+                img.setChecksumSha256(checksum);
+                img.setPrimaryImage(true);
+                imageRepo.save(img);
+
+                // 상품 메인 경로 반영
+                p.setMainImagePath(storedPath + "/" + storedName);
+                BIZ_LOG.info("PRODUCT_PRIMARY_REPLACED id={} newPath={} checksum={} bytes={}",
+                        p.getId(), p.getMainImagePath(), checksum, bytes.length);
             } catch (IOException e) {
+                BIZ_LOG.error("PRODUCT_PRIMARY_REPLACE_FAILED_IO id={} message={}", id, e.getMessage(), e);
                 throw new IllegalStateException("이미지 저장 중 오류가 발생했습니다.", e);
+            } catch (Exception e) {
+                BIZ_LOG.error("PRODUCT_PRIMARY_REPLACE_FAILED id={} message={}", id, e.getMessage(), e);
+                throw new RuntimeException(e);
             }
         }
 
+        List<String> changed = new ArrayList<>();
+        if (r.name() != null) changed.add("name");
+        if (r.description() != null) changed.add("description");
+        if (r.price() != null) changed.add("price");
+        if (r.stockQuantity() != null) changed.add("stockQuantity");
         productRepo.save(p);
+        BIZ_LOG.info("PRODUCT_UPDATED id={} changed={}", p.getId(), changed);
     }
 
     //추가 이미지 메소드
 
+    // 이미지 교체 (대표 포함), 파일당 512KB, 상품 총합(대표 포함) 3MB
     @Transactional
-    public void setPrimaryImage(Long productId, Long imageId) {
+    public void replaceImage(Long productId, Long imageId, MultipartFile file) throws Exception {
+        BIZ_LOG.info("IMAGE_REPLACE_BEGIN productId={} imageId={}", productId, imageId);
         ProductImage img = imageRepo.findById(imageId)
                 .orElseThrow(() -> new IllegalArgumentException("이미지 없음"));
         if (!Objects.equals(img.getProduct().getId(), productId)) {
             throw new IllegalArgumentException("상품-이미지 불일치");
         }
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("업로드할 파일이 없습니다");
+        }
+        if (!ALLOWED.contains(file.getContentType())) {
+            throw new IllegalArgumentException("허용되지 않는 파일 형식 (JPEG, PNG, WEBP 만 가능)");
+        }
+        if (file.getSize() > MAX_SINGLE) {
+            throw new IllegalArgumentException("파일 하나당 512KB 초과");
+        }
+
+        // 총합 3MB 제한: (현재 총합 - 교체 대상 용량 + 새 파일 용량) ≤ 3MB
+        long used = imageRepo.sumSizeByProductId(productId);
+        long usedWithoutThis = used - img.getSizeBytes();
+        if (usedWithoutThis + file.getSize() > MAX_TOTAL_PER_PRODUCT) {
+            throw new IllegalArgumentException("상품당 이미지 총합 3MB 초과");
+        }
+
+        // 저장 경로: ./upload/YYYY/MM/DD
+        LocalDate d = LocalDate.now();
+        Path base = Paths.get("src/main/resources/static/upload",
+                String.valueOf(d.getYear()),
+                String.format("%02d", d.getMonthValue()),
+                String.format("%02d", d.getDayOfMonth()))
+                .toAbsolutePath();
+        Files.createDirectories(base);
+
+        String ext = switch (Objects.requireNonNull(file.getContentType())) {
+            case "image/jpeg" -> ".jpg";
+            case "image/png"  -> ".png";
+            case "image/webp" -> ".webp";
+            default -> "";
+        };
+        byte[] bytes = file.getBytes();
+        String checksum = sha256Hex(bytes);
+        if (imageRepo.existsByChecksumSha256AndIdNot(checksum, imageId)) {
+            throw new IllegalStateException("중복된 이미지입니다");
+        }
+        String storedName = UUID.randomUUID().toString().replace("-", "") + ext;
+        Path target = base.resolve(storedName);
+        Files.write(target, bytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+
+        // 기존 파일 삭제(best-effort)
+        try {
+            String rel = (img.getStoredPath() + "/" + img.getStoredName()).replaceFirst("^/", "");
+            Path old = Paths.get("src/main/resources/static").resolve(rel).toAbsolutePath();
+            Files.deleteIfExists(old);
+        } catch (Exception ignore) { /* 파일이 없어도 무시 */ }
+
+        // 메타데이터 갱신
+        img.setOriginalName(Objects.requireNonNull(file.getOriginalFilename()));
+        img.setStoredPath("/upload/%d/%02d/%02d".formatted(d.getYear(), d.getMonthValue(), d.getDayOfMonth()));
+        img.setStoredName(storedName);
+        img.setSizeBytes(bytes.length);
+        img.setChecksumSha256(checksum);
+        imageRepo.save(img);
+
+        // 대표 이미지였다면 상품 메인 경로도 최신으로 동기화
+        if (img.isPrimaryImage()) {
+            Product p = img.getProduct();
+            p.setMainImagePath(img.getStoredPath() + "/" + img.getStoredName());
+            productRepo.save(p);
+        }
+        BIZ_LOG.info("IMAGE_REPLACED productId={} imageId={} checksum={} bytes={}",
+                productId, imageId, checksum, bytes.length);
+    }
+
+    @Transactional
+    public void setPrimaryImage(Long productId, Long imageId) {
+        BIZ_LOG.info("PRIMARY_SET_BEGIN productId={} imageId={}", productId, imageId);
+        ProductImage img = imageRepo.findById(imageId)
+                .orElseThrow(() -> new IllegalArgumentException("이미지 없음"));
+        if (!Objects.equals(img.getProduct().getId(), productId)) {
+            throw new IllegalArgumentException("상품-이미지 불일치");
+        }
+        Long prevPrimaryId = imageRepo.findByProduct_Id(productId).stream()
+                .filter(ProductImage::isPrimaryImage)
+                .map(ProductImage::getId)
+                .findFirst()
+                .orElse(null);
         // 기존 대표 해제
         imageRepo.findByProduct_Id(productId).forEach(i -> {
             if (i.isPrimaryImage()) i.setPrimaryImage(false);
@@ -294,10 +494,12 @@ public class ProductService {
         Product p = img.getProduct();
         p.setMainImagePath(img.getStoredPath() + "/" + img.getStoredName());
         productRepo.save(p);
+        BIZ_LOG.info("PRIMARY_SET productId={} prev={} now={}", productId, prevPrimaryId, imageId);
     }
 
     @Transactional
     public void deleteImage(Long productId, Long imageId) {
+        BIZ_LOG.info("IMAGE_DELETE_BEGIN productId={} imageId={}", productId, imageId);
         ProductImage img = imageRepo.findById(imageId)
                 .orElseThrow(() -> new IllegalArgumentException("이미지 없음"));
         if (!Objects.equals(img.getProduct().getId(), productId)) {
@@ -316,22 +518,24 @@ public class ProductService {
                 productRepo.save(p);
             });
         }
+        BIZ_LOG.info("IMAGE_DELETED productId={} imageId={} wasPrimary={}", productId, imageId, wasPrimary);
     }
 
     //관리자 재고조정
     @Transactional
     public StockAdjustResponse adjustStock(Long productId, int deltaQty) {
+        BIZ_LOG.info("STOCK_ADJUST_BEGIN productId={} delta={}", productId, deltaQty);
         Product p = productRepo.findById(productId)
                 .orElseThrow(() -> new IllegalArgumentException("상품이 존재하지 않습니다. id=" + productId));
-
-        int after = p.getStockQuantity() + deltaQty;
+        int before = p.getStockQuantity();
+        int after = before + deltaQty;
         if (after < 0) {
             throw new IllegalArgumentException("재고가 음수가 될 수 없습니다. (현재:" + p.getStockQuantity() + ", 변경:" + deltaQty + ")");
         }
 
         p.setStockQuantity(after);
         productRepo.save(p);
-
+        BIZ_LOG.info("STOCK_ADJUSTED productId={} before={} delta={} after={}", productId, before, deltaQty, after);
         return new StockAdjustResponse(p.getId(), after);
     }
 

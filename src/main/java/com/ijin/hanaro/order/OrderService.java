@@ -15,6 +15,9 @@ import org.springframework.stereotype.Service;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -31,16 +34,20 @@ public class OrderService {
     private final UserRepository userRepo;
     private final MeterRegistry meterRegistry;
 
+    private static final Logger ORDER_LOG = LoggerFactory.getLogger("business.order");
+
     /** 장바구니 전체를 주문으로 생성하고, 성공 시 장바구니 비움 + 재고 차감 (트랜잭션) */
     @Transactional
     public OrderCreateResponse createFromCart(String username) {
         long _start = System.nanoTime();
+        ORDER_LOG.info("ORDER_CREATE_BEGIN username={}", username);
         try {
             User user = userRepo.findByUsername(username)
                     .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
 
             List<CartItem> cartItems = cartItemRepo.findByCartUserId(user.getId());
             if (cartItems.isEmpty()) {
+                ORDER_LOG.warn("ORDER_CREATE_FAILED_EMPTY_CART username={}", username);
                 throw new IllegalStateException("장바구니가 비어 있어 주문을 생성할 수 없습니다.");
             }
 
@@ -50,9 +57,16 @@ public class OrderService {
             for (CartItem ci : cartItems) {
                 Product p = productRepo.findById(ci.getProduct().getId())
                         .orElseThrow(() -> new IllegalArgumentException("상품을 찾을 수 없습니다. id=" + ci.getProduct().getId()));
-                if (p.isDeleted()) throw new IllegalStateException("삭제된 상품이 포함되어 있습니다. 상품 id=" + p.getId());
-                if (p.getStockQuantity() <= 0) throw new IllegalStateException("품절 상품이 포함되어 있습니다. 상품 id=" + p.getId());
+                if (p.isDeleted()) {
+                    ORDER_LOG.warn("ORDER_CREATE_FAILED_DELETED_PRODUCT username={} productId={}", username, p.getId());
+                    throw new IllegalStateException("삭제된 상품이 포함되어 있습니다. 상품 id=" + p.getId());
+                }
+                if (p.getStockQuantity() <= 0) {
+                    ORDER_LOG.warn("ORDER_CREATE_FAILED_SOLD_OUT username={} productId={}", username, p.getId());
+                    throw new IllegalStateException("품절 상품이 포함되어 있습니다. 상품 id=" + p.getId());
+                }
                 if (ci.getQuantity() > p.getStockQuantity()) {
+                    ORDER_LOG.warn("ORDER_CREATE_FAILED_STOCK_SHORT username={} productId={} needQty={} stockQty={}", username, p.getId(), ci.getQuantity(), p.getStockQuantity());
                     throw new IllegalStateException("재고 부족: 상품(" + p.getName() + ") 남은 재고=" + p.getStockQuantity());
                 }
                 total = total.add(p.getPrice().multiply(BigDecimal.valueOf(ci.getQuantity())));
@@ -71,6 +85,8 @@ public class OrderService {
             order.setCreatedAt(LocalDateTime.now());
             orderRepo.save(order);
 
+            ORDER_LOG.info("ORDER_CREATED id={} orderNo={} username={} total={} items={}", order.getId(), order.getOrderNo(), username, total, cartItems.size());
+
             // 아이템 생성 + 재고 차감
             for (CartItem ci : cartItems) {
                 Product p = productMap.get(ci.getProduct().getId());
@@ -83,15 +99,18 @@ public class OrderService {
                         .quantity(ci.getQuantity())
                         .build();
                 orderItemRepo.save(oi);
-
                 p.setStockQuantity(p.getStockQuantity() - ci.getQuantity());
                 productRepo.save(p);
+                ORDER_LOG.info("ORDER_ITEM_ADDED orderId={} productId={} name='{}' unitPrice={} qty={} stockAfter={}",
+                        order.getId(), p.getId(), p.getName(), p.getPrice(), ci.getQuantity(), p.getStockQuantity());
             }
 
             // 장바구니 비우기
             cartItemRepo.deleteByCartUserId(user.getId());
+            ORDER_LOG.info("CART_CLEARED username={} userId={}", username, user.getId());
 
             meterRegistry.counter("orders.created.count").increment();
+            ORDER_LOG.info("ORDER_CREATE_SUCCESS id={} orderNo={} username={} total={}", order.getId(), order.getOrderNo(), username, total);
             return new OrderCreateResponse(order.getId(), order.getOrderNo());
         } finally {
             Timer.builder("orders.create.time")
@@ -111,6 +130,7 @@ public class OrderService {
     @Transactional(readOnly = true)
     // 내 주문 목록
     public Page<OrderListItemResponse> myOrders(String username, Pageable pageable) {
+        ORDER_LOG.info("MY_ORDERS_QUERY username={} page={} size={}", username, pageable.getPageNumber(), pageable.getPageSize());
         Long userId = userRepo.findIdByUsername(username)
                 .orElseThrow(() -> new IllegalArgumentException("사용자를 찾을 수 없습니다."));
 
@@ -155,6 +175,7 @@ public class OrderService {
     @Transactional(readOnly = true)
     // 내 주문 상세 (본인 소유 체크는 컨트롤러에서)
     public OrderDetailResponse getDetail(Long orderId) {
+        ORDER_LOG.info("ORDER_DETAIL_QUERY id={}", orderId);
         Order o = orderRepo.findById(orderId)
                 .orElseThrow(() -> new IllegalArgumentException("주문을 찾을 수 없습니다. id=" + orderId));
         return new OrderDetailResponse(
@@ -174,6 +195,9 @@ public class OrderService {
 
     @Transactional(readOnly = true)
     public Page<Order> adminSearch(OrderAdminSearch cond, Pageable pageable) {
+        ORDER_LOG.info("ADMIN_ORDERS_SEARCH status={} orderNoLike='{}' usernameLike='{}' from={} to={} page={} size={}",
+                cond.status(), cond.orderNoLike(), cond.usernameLike(), cond.fromDate(), cond.toDate(),
+                pageable.getPageNumber(), pageable.getPageSize());
         Specification<Order> spec = Specification.where(OrderSpecifications.statusEq(cond.status()))
                 .and(OrderSpecifications.orderNoLike(cond.orderNoLike()))
                 .and(OrderSpecifications.usernameLike(cond.usernameLike()))

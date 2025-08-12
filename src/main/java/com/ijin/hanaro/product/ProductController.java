@@ -59,45 +59,82 @@ public class ProductController {
         return productService.detail(id);
     }
 
-    @Operation(summary = "상품 생성(관리자)", description = "개별 폼 필드(name/price/stockQuantity/description) + mainImage(file)")
+    @Operation(summary = "상품 생성(관리자)", description = "개별 폼 필드 + 이미지 여러 장(각 512KB 이하, 총합 3MB 이하 / 첫 장은 대표, 나머지는 추가 이미지)")
     @PostMapping(value = "/admin/products", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Long create(
             @RequestParam("name") String name,
             @RequestParam("price") java.math.BigDecimal price,
             @RequestParam("stockQuantity") Integer stockQuantity,
             @RequestParam(value = "description", required = false) String description,
-            @RequestPart("mainImage") org.springframework.web.multipart.MultipartFile mainImage
-    ) {
-        if (mainImage == null || mainImage.isEmpty()) {
-            throw new IllegalArgumentException("메인 이미지는 필수입니다.");
+            @RequestPart("images") java.util.List<org.springframework.web.multipart.MultipartFile> images
+    ) throws Exception {
+        if (images == null || images.isEmpty()) {
+            throw new IllegalArgumentException("업로드할 이미지가 없습니다");
         }
         ProductCreateRequest request = new ProductCreateRequest(name, price, stockQuantity, description);
-        Set<ConstraintViolation<ProductCreateRequest>> violations = validator.validate(request);
+        java.util.Set<jakarta.validation.ConstraintViolation<ProductCreateRequest>> violations = validator.validate(request);
         if (!violations.isEmpty()) {
-            throw new ConstraintViolationException(violations);
+            throw new jakarta.validation.ConstraintViolationException(violations);
         }
-        return productService.create(request, mainImage);
+        // 첫 번째 이미지를 대표 이미지로 사용하여 상품 생성
+        org.springframework.web.multipart.MultipartFile mainImage = images.get(0);
+        Long productId = productService.create(request, mainImage);
+        // 나머지 이미지는 추가 이미지로 업로드
+        if (images.size() > 1) {
+            productService.uploadImages(productId, images.subList(1, images.size()));
+        }
+        return productId;
     }
 
-    @Operation(summary = "상품 수정(관리자)", description = "폼 필드 + mainImage(file)[선택]")
+    @Operation(
+        summary = "상품 수정(관리자)",
+        description = "개별 폼 필드(name, price, stockQuantity, description, mainImagePath) + mainImage(file)[선택] + images(여러 장, 각 512KB 이하, 총합 3MB 이하)"
+    )
     @PutMapping(value = "/admin/products/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Void> update(
             @PathVariable Long id,
-            @ModelAttribute @Valid ProductUpdateRequest req,
-            @RequestPart(value = "mainImage", required = false) MultipartFile mainImage
-    ) {
+            @RequestParam(value = "name", required = false) String name,
+            @RequestParam(value = "price", required = false) BigDecimal price,
+            @RequestParam(value = "stockQuantity", required = false) Integer stockQuantity,
+            @RequestParam(value = "description", required = false) String description,
+            @RequestParam(value = "mainImagePath", required = false) String mainImagePath,
+            @RequestPart(value = "mainImage", required = false) MultipartFile mainImage,
+            @RequestPart(value = "images", required = false) List<MultipartFile> images
+    ) throws Exception {
+        ProductUpdateRequest req = new ProductUpdateRequest(name, price, stockQuantity, description, mainImagePath);
+        Set<ConstraintViolation<ProductUpdateRequest>> violations = validator.validate(req);
+        if (!violations.isEmpty()) {
+            throw new ConstraintViolationException(violations);
+        }
         productService.updateWithImage(id, req, mainImage);
+        if (images != null && !images.isEmpty()) {
+            productService.uploadImages(id, images);
+        }
         return ResponseEntity.noContent().build();
     }
 
     //추가 이미지 API
-    @Operation(summary = "추가 이미지 업로드(관리자)", description = "여러 장 업로드 및 중복 체크(똑같은 이미지 중복 업로드시 에러처리")
+    @Operation(summary = "추가 이미지 업로드(관리자)", description = "여러 장 업로드 및 중복 체크(각 512KB 이하, 상품 총합 3MB 이하)")
     @PostMapping(value = "/admin/products/{id}/images", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public List<Long> uploadImages(
             @PathVariable Long id,
             @RequestParam("files") List<MultipartFile> files
     ) throws Exception {
+        if (files == null || files.isEmpty()) {
+            throw new IllegalArgumentException("업로드할 이미지가 없습니다");
+        }
         return productService.uploadImages(id, files);
+    }
+
+    @Operation(summary = "상품 이미지 교체(관리자)", description = "기존 이미지 파일을 새 파일로 교체 (각 512KB 이하, 상품 총합 3MB 이하)")
+    @PutMapping(value = "/admin/products/{id}/images/{imageId}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Void> replaceImage(
+            @PathVariable Long id,
+            @PathVariable Long imageId,
+            @RequestPart("file") MultipartFile file
+    ) throws Exception {
+        productService.replaceImage(id, imageId, file);
+        return ResponseEntity.noContent().build();
     }
 
     @Operation(summary = "대표 이미지 지정(관리자)", description = "해당 상품의 대표 이미지를 지정")
