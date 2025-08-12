@@ -30,7 +30,7 @@ public class SecurityConfig {
                         org.springframework.security.config.http.SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         // Allow CORS preflight
-                        .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         // Swagger & API docs
                         .requestMatchers(
                                 "/swagger-ui/**",
@@ -38,10 +38,11 @@ public class SecurityConfig {
                                 "/v3/api-docs",
                                 "/v3/api-docs/**",
                                 "/docs/**",
-                                "monitor/**"
+                                "/monitor/**"
                         ).permitAll()
+                        .requestMatchers("/monitor/**").hasRole("ADMIN")
                         // Actuator – expose health/info publicly; lock down the rest to ADMIN
-                        .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
+                        .requestMatchers("/actuator/health/**", "/actuator/info", "/error").permitAll()
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
                         // Auth endpoints
                         .requestMatchers("/auth/**").permitAll()

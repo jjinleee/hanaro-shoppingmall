@@ -31,6 +31,10 @@ public class ProductService {
         if (mainImage == null || mainImage.isEmpty()) {
             throw new IllegalArgumentException("메인 이미지는 필수입니다.");
         }
+        // 동일 이름 상품 중복 생성 방지 (소프트삭제되지 않은 상품만 검사)
+        if (productRepo.existsByNameIgnoreCaseAndIsDeletedFalse(r.name())) {
+            throw new IllegalStateException("이미 존재하는 상품명입니다: " + r.name());
+        }
 
         Product p = new Product();
         p.setName(r.name());
@@ -84,6 +88,12 @@ public class ProductService {
     @Transactional
     public void update(Long id, ProductUpdateRequest r) {
         Product p = productRepo.findById(id).orElseThrow(() -> new IllegalArgumentException("상품 없음"));
+        // 이름이 변경되는 경우에만 중복 검사
+        if (r.name() != null && !p.getName().equalsIgnoreCase(r.name())) {
+            if (productRepo.existsByNameIgnoreCaseAndIsDeletedFalseAndIdNot(r.name(), id)) {
+                throw new IllegalStateException("이미 존재하는 상품명입니다: " + r.name());
+            }
+        }
         p.setName(r.name());
         p.setDescription(r.description());
         p.setPrice(r.price());
@@ -214,6 +224,12 @@ public class ProductService {
     @Transactional
     public void updateWithImage(Long id, ProductUpdateRequest r, MultipartFile mainImage) {
         Product p = productRepo.findById(id).orElseThrow(() -> new IllegalArgumentException("상품 없음"));
+        // 이름이 변경되는 경우에만 중복 검사
+        if (r.name() != null && !p.getName().equalsIgnoreCase(r.name())) {
+            if (productRepo.existsByNameIgnoreCaseAndIsDeletedFalseAndIdNot(r.name(), id)) {
+                throw new IllegalStateException("이미 존재하는 상품명입니다: " + r.name());
+            }
+        }
         p.setName(r.name());
         p.setDescription(r.description());
         p.setPrice(r.price());

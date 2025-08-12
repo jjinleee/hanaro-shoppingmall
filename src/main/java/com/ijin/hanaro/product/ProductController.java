@@ -5,6 +5,10 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 
 import com.ijin.hanaro.product.dto.*;
 import jakarta.validation.Valid;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
+import jakarta.validation.Validator;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.*;
 import org.springframework.http.ResponseEntity;
@@ -19,6 +23,7 @@ import java.util.List;
 @Tag(name = "Products", description = "상품 공개 조회 및 관리자 상품 관리 API")
 public class ProductController {
     private final ProductService productService;
+    private final Validator validator;
 
     // ===== 공개 조회 =====
     @Operation(summary = "상품 목록 조회(공개)", description = "검색어 q(이름/설명 LIKE), 페이지네이션 page/size 지원")
@@ -54,33 +59,33 @@ public class ProductController {
         return productService.detail(id);
     }
 
-    @Operation(summary = "상품 생성(관리자)", description = "멀티파트로 기본 정보 + 메인 이미지 업로드")
+    @Operation(summary = "상품 생성(관리자)", description = "개별 폼 필드(name/price/stockQuantity/description) + mainImage(file)")
     @PostMapping(value = "/admin/products", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Long create(
             @RequestParam("name") String name,
-            @RequestParam("price") BigDecimal price,
+            @RequestParam("price") java.math.BigDecimal price,
             @RequestParam("stockQuantity") Integer stockQuantity,
-            @RequestParam("description") String description,
-            @RequestPart("mainImage") MultipartFile mainImage
+            @RequestParam(value = "description", required = false) String description,
+            @RequestPart("mainImage") org.springframework.web.multipart.MultipartFile mainImage
     ) {
         if (mainImage == null || mainImage.isEmpty()) {
             throw new IllegalArgumentException("메인 이미지는 필수입니다.");
         }
         ProductCreateRequest request = new ProductCreateRequest(name, price, stockQuantity, description);
+        Set<ConstraintViolation<ProductCreateRequest>> violations = validator.validate(request);
+        if (!violations.isEmpty()) {
+            throw new ConstraintViolationException(violations);
+        }
         return productService.create(request, mainImage);
     }
 
-    @Operation(summary = "상품 수정(관리자)", description = "기본 정보 수정, 메인 이미지 교체 선택")
+    @Operation(summary = "상품 수정(관리자)", description = "폼 필드 + mainImage(file)[선택]")
     @PutMapping(value = "/admin/products/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Void> update(
             @PathVariable Long id,
-            @RequestParam("name") String name,
-            @RequestParam("price") BigDecimal price,
-            @RequestParam("stockQuantity") Integer stockQuantity,
-            @RequestParam("description") String description,
-            @RequestPart(value = "mainImage", required = false) MultipartFile mainImage // 교체 시에만 첨부
+            @ModelAttribute @Valid ProductUpdateRequest req,
+            @RequestPart(value = "mainImage", required = false) MultipartFile mainImage
     ) {
-        ProductUpdateRequest req = new ProductUpdateRequest(name, price, stockQuantity, description, null, null);
         productService.updateWithImage(id, req, mainImage);
         return ResponseEntity.noContent().build();
     }

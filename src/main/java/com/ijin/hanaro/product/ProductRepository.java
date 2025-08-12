@@ -25,4 +25,8 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
     Page<Product> searchPublic(@Param("q") String q, Pageable pageable);
 
     Optional<Product> findByIdAndIsDeletedFalse(Long id);
+
+    boolean existsByNameIgnoreCaseAndIsDeletedFalse(String name);
+    boolean existsByNameIgnoreCaseAndIsDeletedFalseAndIdNot(String name, Long id);
+
 }
