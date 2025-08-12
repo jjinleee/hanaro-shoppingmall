@@ -1,6 +1,8 @@
 package com.ijin.hanaro.user;
 
 import com.ijin.hanaro.user.dto.UserSummaryResponse;
+import com.ijin.hanaro.cart.CartRepository;
+import com.ijin.hanaro.cart.CartItemRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.*;
 import org.springframework.stereotype.Service;
@@ -10,6 +12,8 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class AdminUserService {
     private final UserRepository userRepository;
+    private final CartRepository cartRepository;
+    private final CartItemRepository cartItemRepository;
 
     @Transactional(readOnly = true)
     public Page<UserSummaryResponse> getUsers(String q, Pageable pageable) {
@@ -31,6 +35,9 @@ public class AdminUserService {
         if (!userRepository.existsById(id)) {
             throw new IllegalArgumentException("회원이 존재하지 않습니다");
         }
+        // 선삭제: 장바구니 아이템 -> 장바구니 -> 사용자
+        cartItemRepository.deleteByCartUserId(id);
+        cartRepository.deleteByUserId(id);
         userRepository.deleteById(id);
     }
 }
